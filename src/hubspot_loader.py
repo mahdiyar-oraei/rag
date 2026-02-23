@@ -174,18 +174,24 @@ class HubSpotLoader:
     def _fetch_deals(
         self,
         on_progress: Callable[[str, int], None] | None = None,
+        company_map: dict[str, str] | None = None,
     ) -> list[Document]:
-        """Fetch all deals and return as Documents."""
+        """Fetch all deals and return as Documents. Enrich with company name when company_map provided."""
         docs: list[Document] = []
         after: str | None = None
+        company_map = company_map or {}
 
         while True:
             try:
-                page = self.client.crm.deals.basic_api.get_page(
-                    limit=_PAGE_LIMIT,
-                    after=after,
-                    properties=_DEAL_PROPS,
-                )
+                kwargs: dict = {
+                    "limit": _PAGE_LIMIT,
+                    "properties": _DEAL_PROPS,
+                }
+                if after:
+                    kwargs["after"] = after
+                if company_map:
+                    kwargs["associations"] = ["companies"]
+                page = self.client.crm.deals.basic_api.get_page(**kwargs)
             except DealsApiException as exc:
                 raise RuntimeError(f"HubSpot Deals API error: {exc}") from exc
 
@@ -200,6 +206,19 @@ class HubSpotLoader:
                     f"Amount: {amount_str}",
                     f"Close Date: {props.get('closedate') or 'N/A'}",
                 ]
+                if company_map:
+                    company_name = "N/A"
+                    assoc = getattr(record, "associations", None)
+                    if assoc:
+                        companies_assoc = assoc.get("companies") if isinstance(assoc, dict) else getattr(assoc, "companies", None)
+                        if companies_assoc:
+                            results = getattr(companies_assoc, "results", None) or (companies_assoc.get("results", []) if isinstance(companies_assoc, dict) else [])
+                            if results:
+                                first = results[0]
+                                cid = getattr(first, "id", first.get("id") if isinstance(first, dict) else None)
+                                if cid:
+                                    company_name = company_map.get(str(cid), "N/A")
+                    lines.append(f"Company: {company_name}")
                 docs.append(
                     Document(
                         page_content="\n".join(lines),
@@ -224,11 +243,22 @@ class HubSpotLoader:
     def load_deals(
         self,
         on_progress: Callable[[str, int], None] | None = None,
+        companies: list[Document] | None = None,
     ) -> list[Document]:
-        """Fetch all deals (with timeout when on_progress is not used)."""
+        """Fetch all deals (with timeout when on_progress is not used). Enrich with company names when companies provided."""
+        company_map: dict[str, str] = {}
+        if companies:
+            for doc in companies:
+                cid = doc.metadata.get("hs_object_id")
+                if cid:
+                    first_line = doc.page_content.split("\n")[0]
+                    name = first_line.replace("Company: ", "").strip() or "Unknown"
+                    company_map[str(cid)] = name
         if on_progress is not None:
-            return self._fetch_deals(on_progress=on_progress)
-        return self._run_with_timeout(self._fetch_deals)
+            return self._fetch_deals(on_progress=on_progress, company_map=company_map or None)
+        return self._run_with_timeout(
+            lambda: self._fetch_deals(company_map=company_map or None)
+        )
 
     def _fetch_owners(
         self,
@@ -293,23 +323,28 @@ class HubSpotLoader:
     ) -> tuple[list[Document], dict[str, int]]:
         """
         Fetch all CRM objects and return combined Documents with a count summary.
+        Deals are enriched with company names when available.
 
         Returns:
             Tuple of (all_documents, counts_per_object_type).
         """
-        loaders = {
-            "contacts": self.load_contacts,
-            "companies": self.load_companies,
-            "deals": self.load_deals,
-            "owners": self.load_owners,
-        }
-
         all_docs: list[Document] = []
         counts: dict[str, int] = {}
 
-        for name, loader in loaders.items():
-            result = loader(on_progress=on_progress)
-            counts[name] = len(result)
-            all_docs.extend(result)
+        contacts = self.load_contacts(on_progress=on_progress)
+        counts["contacts"] = len(contacts)
+        all_docs.extend(contacts)
+
+        companies = self.load_companies(on_progress=on_progress)
+        counts["companies"] = len(companies)
+        all_docs.extend(companies)
+
+        deals = self.load_deals(on_progress=on_progress, companies=companies)
+        counts["deals"] = len(deals)
+        all_docs.extend(deals)
+
+        owners = self.load_owners(on_progress=on_progress)
+        counts["owners"] = len(owners)
+        all_docs.extend(owners)
 
         return all_docs, counts

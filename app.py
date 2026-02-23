@@ -8,7 +8,7 @@ import streamlit as st
 from src.config import ALLOWED_EXTENSIONS, HUBSPOT_ACCESS_TOKEN, OPENAI_API_KEY
 from src.hubspot_loader import HubSpotLoader
 from src.ingestion import index_documents, ingest_documents, load_vectorstore
-from src.retrieval import create_rag_chain, get_retriever
+from src.retrieval import correct_query, create_rag_chain, get_retriever
 
 
 def init_session_state():
@@ -105,7 +105,7 @@ def main():
                         st.write(f"✓ Fetched {len(companies):,} companies")
 
                         st.write("Fetching deals...")
-                        deals = loader.load_deals(on_progress=on_progress)
+                        deals = loader.load_deals(on_progress=on_progress, companies=companies)
                         st.write(f"✓ Fetched {len(deals):,} deals")
 
                         st.write("Fetching owners...")
@@ -175,7 +175,10 @@ def main():
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
-                    response = st.session_state.rag_chain.invoke({"input": prompt})
+                    corrected = correct_query(prompt)
+                    if corrected.lower() != prompt.lower():
+                        st.caption(f"Interpreted as: _{corrected}_")
+                    response = st.session_state.rag_chain.invoke({"input": corrected})
                     answer = response.get("answer", "No answer generated.")
                     st.markdown(answer)
                 except Exception as e:

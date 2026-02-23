@@ -29,10 +29,13 @@ def create_rag_chain(retriever: VectorStoreRetriever):
     llm = get_llm()
 
     system_prompt = (
-        "You are an assistant for question-answering tasks. "
-        "Use the following pieces of retrieved context to answer the question. "
-        "If you don't know the answer based on the context, say that you don't know. "
-        "Do not make up information.\n\nContext: {context}"
+        "You are a CRM sales intelligence assistant. "
+        "The context contains CRM records from HubSpot: Contacts, Companies, Deals, and Owners. "
+        "Treat 'account' as a synonym for Company, 'deal size' as Amount, and 'rep' as Owner. "
+        "Synthesize information across record types to give a complete answer. "
+        "If partial information exists, share what you know and note what is missing. "
+        "Only say you don't know if the context contains no relevant information at all. "
+        "Do not invent data not present in the context.\n\nContext: {context}"
     )
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
@@ -43,6 +46,18 @@ def create_rag_chain(retriever: VectorStoreRetriever):
     rag_chain = create_retrieval_chain(retriever, question_answer_chain)
 
     return rag_chain
+
+
+def correct_query(query: str) -> str:
+    """Fix typos and clarify CRM intent using the LLM before retrieval."""
+    if not query.strip():
+        return query
+    llm = get_llm()
+    result = llm.invoke(
+        "Fix any typos and rephrase the following CRM question for clarity. "
+        "Return only the corrected question, no explanation:\n\n" + query
+    )
+    return (result.content or "").strip() or query
 
 
 def get_retriever(vectorstore, k: int | None = None) -> VectorStoreRetriever:
