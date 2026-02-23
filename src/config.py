@@ -27,3 +27,8 @@ TOP_K: int = int(os.getenv("TOP_K", "3"))
 
 # Allowed file types for upload
 ALLOWED_EXTENSIONS: set[str] = {".pdf", ".md", ".txt"}
+
+# HubSpot
+HUBSPOT_ACCESS_TOKEN: str = os.getenv("HUBSPOT_ACCESS_TOKEN", "")
+HUBSPOT_BASE_URL: str | None = os.getenv("HUBSPOT_BASE_URL") or None  # e.g. https://api-eu1.hubapi.com for EU
+HUBSPOT_OBJECTS: list[str] = ["contacts", "companies", "deals", "owners"]

@@ -7,3 +7,5 @@ chromadb>=0.5.0
 pypdf>=5.0.0
 python-dotenv>=1.0.0
 streamlit>=1.40.0
+hubspot-api-client>=9.0.0
+

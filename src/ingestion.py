@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from langchain_chroma import Chroma
+from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -46,6 +47,36 @@ def index_documents(paths: list[str | Path]) -> Chroma:
     text_splitter = get_text_splitter()
 
     docs = load_documents(paths)
+    splits = text_splitter.split_documents(docs)
+
+    CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+
+    vectorstore = Chroma.from_documents(
+        documents=splits,
+        embedding=embeddings,
+        persist_directory=str(CHROMA_PERSIST_DIR),
+        collection_name=CHROMA_COLLECTION_NAME,
+    )
+
+    return vectorstore
+
+
+def ingest_documents(docs: list[Document]) -> Chroma:
+    """
+    Chunk, embed, and store pre-loaded Documents in ChromaDB.
+
+    Useful for programmatic sources (e.g. HubSpot) where documents are already
+    in memory rather than on disk.
+
+    Args:
+        docs: List of LangChain Document objects.
+
+    Returns:
+        Chroma vectorstore instance (persisted to disk).
+    """
+    embeddings = get_embeddings()
+    text_splitter = get_text_splitter()
+
     splits = text_splitter.split_documents(docs)
 
     CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
