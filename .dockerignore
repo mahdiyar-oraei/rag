@@ -1,0 +1,12 @@
+.venv/
+venv/
+chroma_db/
+fb_messenger.db
+.env
+.env.*
+__pycache__/
+*.pyc
+.git/
+.gitignore
+*.md
+.vscode/

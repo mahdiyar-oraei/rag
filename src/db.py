@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-_DB_PATH: Path = Path(__file__).resolve().parent.parent / "fb_messenger.db"
+_DB_PATH: Path = Path(os.getenv("FB_MESSENGER_DB_PATH", "/data/fb_messenger.db"))
 
 
 def _get_conn() -> sqlite3.Connection:

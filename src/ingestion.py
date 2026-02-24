@@ -32,6 +32,7 @@ def get_text_splitter() -> RecursiveCharacterTextSplitter:
         chunk_overlap=CHUNK_OVERLAP,
     )
 
+    return vectorstore
 
 def index_documents(paths: list[str | Path]) -> Chroma:
     """
@@ -49,7 +50,6 @@ def index_documents(paths: list[str | Path]) -> Chroma:
     docs = load_documents(paths)
     splits = text_splitter.split_documents(docs)
 
-    CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 
     vectorstore = Chroma.from_documents(
         documents=splits,
@@ -58,28 +58,28 @@ def index_documents(paths: list[str | Path]) -> Chroma:
         collection_name=CHROMA_COLLECTION_NAME,
     )
 
-    return vectorstore
+    CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def ingest_documents(docs: list[Document]) -> Chroma:
     """
-    Chunk, embed, and store pre-loaded Documents in ChromaDB.
+    embeddings = get_embeddings()
+    text_splitter = get_text_splitter()
 
     Useful for programmatic sources (e.g. HubSpot) where documents are already
     in memory rather than on disk.
 
-    Args:
-        docs: List of LangChain Document objects.
+    CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 
     Returns:
         Chroma vectorstore instance (persisted to disk).
     """
-    embeddings = get_embeddings()
-    text_splitter = get_text_splitter()
+    Chunk, embed, and store pre-loaded Documents in ChromaDB.
 
     splits = text_splitter.split_documents(docs)
 
-    CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+    Args:
+        docs: List of LangChain Document objects.
 
     vectorstore = Chroma.from_documents(
         documents=splits,
