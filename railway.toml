@@ -2,6 +2,6 @@
 builder = "DOCKERFILE"
 
 [deploy]
-healthcheckPath = "/webhook"
+healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
