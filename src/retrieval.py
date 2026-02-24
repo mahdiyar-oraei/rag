@@ -6,7 +6,7 @@ from langchain_classic.chains.combine_documents import create_stuff_documents_ch
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.vectorstores import VectorStoreRetriever
 
-from .config import LLM_MODEL, OPENAI_API_KEY, TOP_K
+from .config import LLM_MODEL, LLM_REQUEST_TIMEOUT, OPENAI_API_KEY, TOP_K
 
 
 def create_contact_scoped_retriever(vectorstore, contact_id: str, k: int | None = None) -> VectorStoreRetriever:
@@ -43,7 +43,11 @@ def get_llm() -> ChatOpenAI:
     """Create ChatOpenAI instance."""
     if not OPENAI_API_KEY:
         raise ValueError("OPENAI_API_KEY is not set. Add it to your .env file.")
-    return ChatOpenAI(model=LLM_MODEL, temperature=0)
+    return ChatOpenAI(
+        model=LLM_MODEL,
+        temperature=0,
+        timeout=LLM_REQUEST_TIMEOUT,
+    )
 
 
 def create_rag_chain(retriever: VectorStoreRetriever):

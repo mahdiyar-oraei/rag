@@ -5,7 +5,12 @@ from pathlib import Path
 
 import streamlit as st
 
-from src.config import ALLOWED_EXTENSIONS, HUBSPOT_ACCESS_TOKEN, OPENAI_API_KEY
+from src.config import (
+    ALLOWED_EXTENSIONS,
+    HUBSPOT_ACCESS_TOKEN,
+    OPENAI_API_KEY,
+    SKIP_QUERY_CORRECTION,
+)
 from src.db import (
     get_all_linked,
     get_contact_for_psid,
@@ -346,8 +351,8 @@ def _render_chat_tab():
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
-                    corrected = correct_query(prompt)
-                    if corrected.lower() != prompt.lower():
+                    corrected = prompt if SKIP_QUERY_CORRECTION else correct_query(prompt)
+                    if not SKIP_QUERY_CORRECTION and corrected.lower() != prompt.lower():
                         st.caption(f"Interpreted as: _{corrected}_")
 
                     # Build input: include conversation history when chatting as a user

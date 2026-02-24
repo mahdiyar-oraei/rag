@@ -24,7 +24,11 @@ CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "1000"))
 CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "200"))
 
 # Retrieval
-TOP_K: int = int(os.getenv("TOP_K", "15"))
+TOP_K: int = int(os.getenv("TOP_K", "10"))
+SKIP_QUERY_CORRECTION: bool = (
+    os.getenv("SKIP_QUERY_CORRECTION", "").strip().lower() in ("1", "true", "yes")
+)
+LLM_REQUEST_TIMEOUT: int = int(os.getenv("LLM_REQUEST_TIMEOUT", "120"))
 
 # Allowed file types for upload
 ALLOWED_EXTENSIONS: set[str] = {".pdf", ".md", ".txt"}

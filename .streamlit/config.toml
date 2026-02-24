@@ -1,0 +1,14 @@
+# Streamlit config for Railway deployment
+# Helps reduce 502 errors when RAG requests take 30+ seconds
+
+[server]
+# Keep WebSocket alive during long-running requests (RAG can take 30-60s)
+# Tornado >=6.5 requires >=30 to avoid connection issues
+websocketPingInterval = 30
+
+# Keep session state longer when client temporarily disconnects
+# (e.g. during slow network or while waiting for RAG response)
+disconnectedSessionTTL = 300
+
+# Disable file watcher in production (no hot reload needed)
+fileWatcherType = "none"
