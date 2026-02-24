@@ -6,11 +6,27 @@ from pathlib import Path
 import streamlit as st
 
 from src.config import ALLOWED_EXTENSIONS, HUBSPOT_ACCESS_TOKEN, OPENAI_API_KEY
-from src.db import get_all_linked, get_unlinked_psids, init_db, link_psid_to_contact
+from src.db import (
+    get_all_linked,
+    get_contact_for_psid,
+    get_messages_for_psid,
+    get_unlinked_psids,
+    init_db,
+    link_psid_to_contact,
+)
 from src.hubspot_cache import get_cache_counts, get_cache_timestamp, load_hubspot_docs
 from src.hubspot_loader import HubSpotLoader
-from src.ingestion import index_documents, ingest_documents, load_vectorstore
-from src.retrieval import correct_query, create_rag_chain, get_retriever
+from src.ingestion import (
+    index_documents,
+    ingest_documents_batched,
+    load_vectorstore,
+)
+from src.retrieval import (
+    correct_query,
+    create_contact_scoped_retriever,
+    create_rag_chain,
+    get_retriever,
+)
 
 init_db()
 
@@ -21,8 +37,12 @@ def init_session_state():
         st.session_state.messages = []
     if "rag_chain" not in st.session_state:
         st.session_state.rag_chain = None
+    if "vectorstore" not in st.session_state:
+        st.session_state.vectorstore = None
     if "fb_contacts" not in st.session_state:
         st.session_state.fb_contacts = []
+    if "chat_psid" not in st.session_state:
+        st.session_state.chat_psid = None
 
 
 def main():
@@ -62,6 +82,7 @@ def main():
                     if paths:
                         vectorstore = index_documents(paths)
                         retriever = get_retriever(vectorstore)
+                        st.session_state.vectorstore = vectorstore
                         st.session_state.rag_chain = create_rag_chain(retriever)
                         st.success(f"Indexed {len(paths)} file(s).")
                     else:
@@ -78,6 +99,7 @@ def main():
                 vectorstore = load_vectorstore()
                 if vectorstore:
                     retriever = get_retriever(vectorstore)
+                    st.session_state.vectorstore = vectorstore
                     st.session_state.rag_chain = create_rag_chain(retriever)
                     st.sidebar.success("Loaded existing index.")
             except Exception:
@@ -133,11 +155,20 @@ def main():
 
                         docs = contacts + companies + deals + owners
                         if docs:
-                            st.write("Embedding and indexing...")
-                            vectorstore = ingest_documents(docs)
+                            st.write("Embedding and indexing (batched)...")
+                            print(f"[Sync] Starting batched ingest of {len(docs):,} docs")
+                            def on_progress(processed: int, total: int, msg: str) -> None:
+                                st.write(msg)
+                                progress_placeholder.markdown(msg)
+                                print(f"[Sync] {msg}")
+                            vectorstore = ingest_documents_batched(
+                                docs, on_progress=on_progress
+                            )
                             retriever = get_retriever(vectorstore)
+                            st.session_state.vectorstore = vectorstore
                             st.session_state.rag_chain = create_rag_chain(retriever)
                             st.write("✓ Indexed into vector store")
+                            print(f"[Sync] Indexed {len(docs):,} docs complete")
                             status.update(
                                 label="Sync complete",
                                 state="complete",
@@ -190,10 +221,20 @@ def main():
                             st.warning("No records in cache. Run **Sync from HubSpot** first.")
                         else:
                             st.write(f"Loading {len(docs):,} records from database...")
-                            vectorstore = ingest_documents(docs)
+                            print(f"[Index] Starting batched ingest of {len(docs):,} docs from cache")
+                            progress_ph = st.empty()
+                            def on_progress(processed: int, total: int, msg: str) -> None:
+                                st.write(msg)
+                                progress_ph.markdown(msg)
+                                print(f"[Index] {msg}")
+                            vectorstore = ingest_documents_batched(
+                                docs, on_progress=on_progress
+                            )
                             retriever = get_retriever(vectorstore)
+                            st.session_state.vectorstore = vectorstore
                             st.session_state.rag_chain = create_rag_chain(retriever)
                             st.write("✓ Embedded and indexed")
+                            print(f"[Index] Indexed {len(docs):,} docs complete")
                             status.update(
                                 label=f"Indexed {len(docs):,} records",
                                 state="complete",
@@ -227,6 +268,18 @@ def main():
         _render_facebook_tab()
 
 
+def _format_conversation_for_prompt(messages: list[dict]) -> str:
+    """Format message history for inclusion in RAG prompt (chronological)."""
+    if not messages:
+        return ""
+    msgs = sorted(messages, key=lambda m: m["timestamp"])
+    lines = []
+    for m in msgs:
+        role = "User" if m["direction"] == "in" else "Assistant"
+        lines.append(f"[{role}]: {m['message']}")
+    return "\n".join(lines)
+
+
 def _render_chat_tab():
     """Render the main RAG chat tab."""
     st.title("📚 NotebookLM-style RAG")
@@ -237,6 +290,48 @@ def _render_chat_tab():
             "Upload documents in the sidebar and click **Index documents** to begin."
         )
         return
+
+    # PSID selector: chat as a specific Facebook user
+    linked = get_all_linked()
+    options = [("— General (all data) —", None)]
+    options.extend(
+        (f"{r['contact_name']} (PSID: {r['psid']})", r["psid"])
+        for r in linked
+    )
+    labels, psids = zip(*options) if options else ([], [])
+    idx = 0
+    if st.session_state.chat_psid:
+        try:
+            idx = list(psids).index(st.session_state.chat_psid)
+        except (ValueError, TypeError):
+            pass
+
+    selected = st.selectbox(
+        "Chat as user",
+        range(len(options)),
+        index=idx,
+        format_func=lambda i: options[i][0],
+        key="chat_psid_select",
+    )
+    chosen_psid = options[selected][1]
+    if chosen_psid != st.session_state.chat_psid:
+        st.session_state.chat_psid = chosen_psid
+        st.session_state.messages = []
+
+    # Show conversation history when a PSID is selected
+    if chosen_psid:
+        mapping = get_contact_for_psid(chosen_psid)
+        if mapping:
+            st.caption(f"Responding as **{mapping['contact_name']}** (HubSpot contact)")
+        msgs = get_messages_for_psid(chosen_psid, limit=100)
+        if msgs:
+            with st.expander("Conversation history", expanded=False):
+                for m in reversed(msgs):
+                    role = "user" if m["direction"] == "in" else "assistant"
+                    with st.chat_message(role):
+                        st.markdown(m["message"])
+                        st.caption(m["timestamp"][:19].replace("T", " ") if m.get("timestamp") else "")
+        st.divider()
 
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
@@ -254,7 +349,30 @@ def _render_chat_tab():
                     corrected = correct_query(prompt)
                     if corrected.lower() != prompt.lower():
                         st.caption(f"Interpreted as: _{corrected}_")
-                    response = st.session_state.rag_chain.invoke({"input": corrected})
+
+                    # Build input: include conversation history when chatting as a user
+                    rag_input = corrected
+                    if chosen_psid and st.session_state.vectorstore:
+                        mapping = get_contact_for_psid(chosen_psid)
+                        if mapping:
+                            contact_id = mapping["hubspot_contact_id"]
+                            msgs = get_messages_for_psid(chosen_psid, limit=50)
+                            conv_text = _format_conversation_for_prompt(msgs)
+                            if conv_text:
+                                rag_input = (
+                                    f"Recent conversation with this contact:\n{conv_text}\n\n"
+                                    f"Current question: {corrected}"
+                                )
+                            retriever = create_contact_scoped_retriever(
+                                st.session_state.vectorstore, contact_id
+                            )
+                            chain = create_rag_chain(retriever)
+                            response = chain.invoke({"input": rag_input})
+                        else:
+                            response = st.session_state.rag_chain.invoke({"input": rag_input})
+                    else:
+                        response = st.session_state.rag_chain.invoke({"input": rag_input})
+
                     answer = response.get("answer", "No answer generated.")
                     st.markdown(answer)
                 except Exception as e:

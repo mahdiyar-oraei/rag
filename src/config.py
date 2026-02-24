@@ -17,6 +17,7 @@ CHROMA_PERSIST_DIR: Path = Path(
     os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
 ).resolve()
 CHROMA_COLLECTION_NAME: str = os.getenv("CHROMA_COLLECTION_NAME", "notebook_docs")
+INGEST_BATCH_SIZE: int = int(os.getenv("INGEST_BATCH_SIZE", "500"))
 
 # Chunking
 CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "1000"))

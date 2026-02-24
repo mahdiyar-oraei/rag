@@ -1,7 +1,11 @@
 """Document ingestion: chunk, embed, and store in ChromaDB."""
 
+from __future__ import annotations
+
+from collections.abc import Callable
 from pathlib import Path
 
+import chromadb
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings
@@ -13,6 +17,7 @@ from .config import (
     CHUNK_OVERLAP,
     CHUNK_SIZE,
     EMBEDDING_MODEL,
+    INGEST_BATCH_SIZE,
     OPENAI_API_KEY,
 )
 from .loaders import load_documents
@@ -87,6 +92,64 @@ def ingest_documents(docs: list[Document]) -> Chroma:
         persist_directory=str(CHROMA_PERSIST_DIR),
         collection_name=CHROMA_COLLECTION_NAME,
     )
+
+    return vectorstore
+
+
+def ingest_documents_batched(
+    docs: list[Document],
+    batch_size: int | None = None,
+    on_progress: Callable[[int, int, str], None] | None = None,
+) -> Chroma:
+    """
+    Chunk, embed, and store Documents in ChromaDB in batches.
+
+    Reduces memory use and avoids timeouts for large datasets (e.g. 40K+ contacts).
+    Replaces any existing collection with the same name.
+
+    Args:
+        docs: List of LangChain Document objects.
+        batch_size: Docs per batch (default from INGEST_BATCH_SIZE).
+        on_progress: Optional callback(processed, total, message) for UI/logging.
+
+    Returns:
+        Chroma vectorstore instance (persisted to disk).
+    """
+    if not docs:
+        raise ValueError("No documents to ingest")
+
+    batch_size = batch_size or INGEST_BATCH_SIZE
+    embeddings = get_embeddings()
+    text_splitter = get_text_splitter()
+
+    CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Delete existing collection for replace semantics
+    try:
+        client = chromadb.PersistentClient(path=str(CHROMA_PERSIST_DIR))
+        client.delete_collection(CHROMA_COLLECTION_NAME)
+    except Exception:
+        pass
+
+    vectorstore = Chroma(
+        persist_directory=str(CHROMA_PERSIST_DIR),
+        embedding_function=embeddings,
+        collection_name=CHROMA_COLLECTION_NAME,
+    )
+
+    total = len(docs)
+    total_batches = (total + batch_size - 1) // batch_size
+    processed = 0
+
+    for i in range(0, total, batch_size):
+        batch = docs[i : i + batch_size]
+        batch_num = (i // batch_size) + 1
+        splits = text_splitter.split_documents(batch)
+        vectorstore.add_documents(splits)
+        processed += len(batch)
+        msg = f"Embedding batch {batch_num}/{total_batches} ({processed:,}/{total:,} docs)"
+        if on_progress:
+            on_progress(processed, total, msg)
 
     return vectorstore
 
