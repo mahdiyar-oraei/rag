@@ -154,12 +154,25 @@ def ingest_documents_batched(
     return vectorstore
 
 
+def _delete_collection_if_corrupt() -> None:
+    """Delete the Chroma collection so it can be rebuilt cleanly."""
+    try:
+        client = chromadb.PersistentClient(path=str(CHROMA_PERSIST_DIR))
+        client.delete_collection(CHROMA_COLLECTION_NAME)
+        print(f"[Chroma] Deleted corrupt collection '{CHROMA_COLLECTION_NAME}' — re-index required.")
+    except Exception:
+        pass
+
+
 def load_vectorstore() -> Chroma | None:
     """
     Load existing ChromaDB vectorstore from disk.
 
+    On corruption (InternalError), deletes the broken collection and returns None
+    so callers know to re-index.
+
     Returns:
-        Chroma vectorstore if it exists and has data, else None.
+        Chroma vectorstore if it exists and is healthy, else None.
     """
     if not CHROMA_PERSIST_DIR.exists():
         return None
@@ -172,6 +185,12 @@ def load_vectorstore() -> Chroma | None:
             embedding_function=embeddings,
             collection_name=CHROMA_COLLECTION_NAME,
         )
+        # Probe the collection with a trivial count to surface corruption early
+        vectorstore._collection.count()
         return vectorstore
+    except chromadb.errors.InternalError as e:
+        print(f"[Chroma] Corrupt index detected: {e}. Deleting and returning None.")
+        _delete_collection_if_corrupt()
+        return None
     except Exception:
         return None

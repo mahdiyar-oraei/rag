@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import PlainTextResponse
+from langchain_chroma import Chroma
 
 from src.config import FB_VERIFY_TOKEN
 from src.db import get_contact_for_psid, init_db, save_message
@@ -20,16 +22,46 @@ app = FastAPI(title="Facebook Messenger Webhook")
 # Initialize DB on startup
 init_db()
 
+# Module-level vectorstore cache — loaded once, reused across all messages.
+# A threading lock prevents duplicate loads when concurrent messages arrive.
+_vectorstore_cache: Chroma | None = None
+_vectorstore_lock = threading.Lock()
+
+
+def _get_vectorstore() -> Chroma | None:
+    """Return the cached vectorstore, loading it on first call."""
+    global _vectorstore_cache
+    if _vectorstore_cache is not None:
+        return _vectorstore_cache
+    with _vectorstore_lock:
+        # Double-checked locking: another thread may have loaded it while we waited
+        if _vectorstore_cache is None:
+            logger.info("Loading vectorstore into memory (first call)…")
+            _vectorstore_cache = load_vectorstore()
+            if _vectorstore_cache is None:
+                logger.warning("Vectorstore not available (not yet indexed or corrupt).")
+            else:
+                logger.info("Vectorstore loaded and cached.")
+    return _vectorstore_cache
+
+
+def _invalidate_vectorstore_cache() -> None:
+    """Drop the cached vectorstore so the next call to _get_vectorstore reloads it."""
+    global _vectorstore_cache
+    with _vectorstore_lock:
+        _vectorstore_cache = None
+
 
 def _process_message(psid: str, text: str) -> None:
     """Blocking message processing (runs in thread pool)."""
+    global _vectorstore_cache
     try:
         save_message(psid, "in", text)
         mapping = get_contact_for_psid(psid)
         if mapping is None:
             reply = "Thanks for reaching out! An agent will connect your account shortly."
         else:
-            vectorstore = load_vectorstore()
+            vectorstore = _get_vectorstore()
             if vectorstore is None:
                 reply = "Your account is connected, but our knowledge base is not ready yet. Please try again later."
             else:
@@ -37,6 +69,11 @@ def _process_message(psid: str, text: str) -> None:
                     reply = answer_for_contact(vectorstore, mapping["hubspot_contact_id"], text)
                 except Exception as e:
                     logger.exception("RAG error for psid=%s: %s", psid, e)
+                    # If it looks like a corrupt index, drop the cache so it will
+                    # attempt to reload (or auto-repair) on the next message
+                    if "hnsw" in str(e).lower() or "compactor" in str(e).lower():
+                        logger.warning("Possible corrupt index — clearing vectorstore cache.")
+                        _invalidate_vectorstore_cache()
                     reply = "Sorry, I encountered an error. Please try again."
         send_message(psid, reply)
         save_message(psid, "out", reply)

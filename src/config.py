@@ -14,8 +14,8 @@ LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
 
 # ChromaDB
 CHROMA_PERSIST_DIR: Path = Path(
-    os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
-).resolve()
+    os.getenv("CHROMA_PERSIST_DIR", "/data/chroma_db")
+)
 CHROMA_COLLECTION_NAME: str = os.getenv("CHROMA_COLLECTION_NAME", "notebook_docs")
 INGEST_BATCH_SIZE: int = int(os.getenv("INGEST_BATCH_SIZE", "500"))
 
@@ -38,8 +38,8 @@ HUBSPOT_ACCESS_TOKEN: str = os.getenv("HUBSPOT_ACCESS_TOKEN", "")
 HUBSPOT_BASE_URL: str | None = os.getenv("HUBSPOT_BASE_URL") or None  # e.g. https://api-eu1.hubapi.com for EU
 HUBSPOT_OBJECTS: list[str] = ["contacts", "companies", "deals", "owners"]
 HUBSPOT_CACHE_PATH: Path = Path(
-    os.getenv("HUBSPOT_CACHE_PATH", "./data/hubspot_cache.db")
-).resolve()
+    os.getenv("HUBSPOT_CACHE_PATH", "/data/hubspot_cache.db")
+)
 def _parse_ttl_hours() -> float | None:
     val = os.getenv("HUBSPOT_CACHE_TTL_HOURS")
     if not val or not val.strip():

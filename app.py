@@ -98,17 +98,8 @@ def main():
                     for p in paths:
                         Path(p).unlink(missing_ok=True)
 
-        # Try to load existing vectorstore on startup
-        if st.session_state.rag_chain is None:
-            try:
-                vectorstore = load_vectorstore()
-                if vectorstore:
-                    retriever = get_retriever(vectorstore)
-                    st.session_state.vectorstore = vectorstore
-                    st.session_state.rag_chain = create_rag_chain(retriever)
-                    st.sidebar.success("Loaded existing index.")
-            except Exception:
-                pass
+        # Vectorstore is NOT auto-loaded on startup to avoid OOM on Railway.
+        # It will be loaded lazily on the first chat query (see _render_chat_tab).
 
         st.divider()
 
@@ -285,6 +276,30 @@ def _format_conversation_for_prompt(messages: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _ensure_vectorstore_loaded() -> bool:
+    """
+    Lazily load the vectorstore on the first query.
+
+    Returns True if the vectorstore is ready, False otherwise.
+    Loading is deferred from startup to avoid OOM-killing Streamlit at boot.
+    """
+    if st.session_state.rag_chain is not None:
+        return True
+    # Attempt to load from disk (shows a spinner so the user sees progress)
+    with st.spinner("Loading knowledge base…"):
+        try:
+            vectorstore = load_vectorstore()
+        except Exception as e:
+            st.error(f"Failed to load knowledge base: {e}")
+            return False
+    if vectorstore is None:
+        return False
+    retriever = get_retriever(vectorstore)
+    st.session_state.vectorstore = vectorstore
+    st.session_state.rag_chain = create_rag_chain(retriever)
+    return True
+
+
 def _render_chat_tab():
     """Render the main RAG chat tab."""
     st.title("📚 NotebookLM-style RAG")
@@ -292,9 +307,9 @@ def _render_chat_tab():
 
     if st.session_state.rag_chain is None:
         st.info(
-            "Upload documents in the sidebar and click **Index documents** to begin."
+            "The knowledge base will be loaded on your first question. "
+            "Or index documents / sync HubSpot from the sidebar first."
         )
-        return
 
     # PSID selector: chat as a specific Facebook user
     linked = get_all_linked()
@@ -350,6 +365,15 @@ def _render_chat_tab():
 
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
+                # Lazy-load the vectorstore on the first query to avoid OOM at startup
+                if not _ensure_vectorstore_loaded():
+                    st.warning(
+                        "Knowledge base is not ready yet. "
+                        "Please index documents or sync HubSpot from the sidebar first."
+                    )
+                    st.session_state.messages.pop()
+                    st.stop()
+
                 try:
                     corrected = prompt if SKIP_QUERY_CORRECTION else correct_query(prompt)
                     if not SKIP_QUERY_CORRECTION and corrected.lower() != prompt.lower():
