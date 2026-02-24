@@ -6,9 +6,12 @@ from pathlib import Path
 import streamlit as st
 
 from src.config import ALLOWED_EXTENSIONS, HUBSPOT_ACCESS_TOKEN, OPENAI_API_KEY
+from src.db import get_all_linked, get_unlinked_psids, init_db, link_psid_to_contact
 from src.hubspot_loader import HubSpotLoader
 from src.ingestion import index_documents, ingest_documents, load_vectorstore
 from src.retrieval import correct_query, create_rag_chain, get_retriever
+
+init_db()
 
 
 def init_session_state():
@@ -17,6 +20,8 @@ def init_session_state():
         st.session_state.messages = []
     if "rag_chain" not in st.session_state:
         st.session_state.rag_chain = None
+    if "fb_contacts" not in st.session_state:
+        st.session_state.fb_contacts = []
 
 
 def main():
@@ -152,7 +157,18 @@ def main():
         else:
             st.caption("Upload and index documents to get started.")
 
-    # Main chat area
+    # Main area: Chat and Facebook Connections tabs
+    tab_chat, tab_fb = st.tabs(["Chat", "Facebook Connections"])
+
+    with tab_chat:
+        _render_chat_tab()
+
+    with tab_fb:
+        _render_facebook_tab()
+
+
+def _render_chat_tab():
+    """Render the main RAG chat tab."""
     st.title("📚 NotebookLM-style RAG")
     st.caption("Ask questions about your indexed documents.")
 
@@ -186,6 +202,87 @@ def main():
                     answer = str(e)
 
         st.session_state.messages.append({"role": "assistant", "content": answer})
+
+
+def _render_facebook_tab():
+    """Render the Facebook Connections admin tab."""
+    st.title("Facebook Messenger Connections")
+    st.caption("Link Facebook users to HubSpot contacts so they can access their data via chat.")
+
+    if not HUBSPOT_ACCESS_TOKEN:
+        st.warning("Set `HUBSPOT_ACCESS_TOKEN` in your `.env` file to load contacts for linking.")
+    else:
+        if st.button("Load contacts from HubSpot", key="fb_load_contacts"):
+            with st.spinner("Loading contacts..."):
+                try:
+                    loader = HubSpotLoader()
+                    docs = loader.load_contacts()
+                    st.session_state.fb_contacts = [
+                        {
+                            "id": str(d.metadata.get("hs_object_id", "")),
+                            "name": d.page_content.split("\n")[0].replace("Contact: ", "").strip() or "Unknown",
+                            "email": next(
+                                (line.replace("Email: ", "").strip() for line in d.page_content.split("\n") if line.startswith("Email: ")),
+                                "N/A",
+                            ),
+                        }
+                        for d in docs
+                    ]
+                    st.success(f"Loaded {len(st.session_state.fb_contacts)} contacts.")
+                except Exception as e:
+                    st.error(f"Failed to load contacts: {e}")
+
+    st.divider()
+
+    st.subheader("Unmatched conversations")
+    unlinked = get_unlinked_psids()
+    if not unlinked:
+        st.info("No unmatched conversations. New Facebook messages will appear here.")
+    else:
+        for row in unlinked:
+            psid = row["psid"]
+            with st.expander(f"PSID: {psid} — {row.get('message_count', 0)} message(s)"):
+                preview = (row.get("message_preview") or "")[:200]
+                if preview:
+                    st.caption(f"Last message: {preview}")
+                if st.session_state.fb_contacts:
+                    search = st.text_input("Search contact", key=f"fb_search_{psid}", placeholder="Name or email...")
+                    contacts = st.session_state.fb_contacts
+                    if search:
+                        q = search.lower()
+                        contacts = [c for c in contacts if q in (c.get("name", "") + c.get("email", "")).lower()]
+                    if contacts:
+                        idx = st.selectbox(
+                            "Select contact to link",
+                            range(len(contacts)),
+                            format_func=lambda i: f"{contacts[i]['name']} ({contacts[i]['email']})",
+                            key=f"fb_select_{psid}",
+                        )
+                        if st.button("Link", key=f"fb_link_{psid}"):
+                            c = contacts[idx]
+                            link_psid_to_contact(psid, c["id"], c["name"])
+                            st.success(f"Linked to {c['name']}.")
+                            st.rerun()
+                else:
+                    st.caption("Click **Load contacts from HubSpot** above first.")
+
+    st.divider()
+    st.subheader("Matched conversations")
+    linked = get_all_linked()
+    if not linked:
+        st.info("No linked conversations yet.")
+    else:
+        st.dataframe(
+            linked,
+            column_config={
+                "psid": "Facebook PSID",
+                "hubspot_contact_id": "HubSpot Contact ID",
+                "contact_name": "Contact Name",
+                "linked_at": "Linked At",
+                "message_count": "Messages",
+            },
+            hide_index=True,
+        )
 
 
 if __name__ == "__main__":

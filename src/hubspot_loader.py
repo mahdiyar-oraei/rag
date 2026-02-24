@@ -171,12 +171,29 @@ class HubSpotLoader:
             return self._fetch_companies(on_progress=on_progress)
         return self._run_with_timeout(self._fetch_companies)
 
+    def _get_association_id(
+        self, assoc: object, key: str
+    ) -> str | None:
+        """Extract first associated object ID from associations."""
+        if not assoc:
+            return None
+        data = assoc.get(key) if isinstance(assoc, dict) else getattr(assoc, key, None)
+        if not data:
+            return None
+        results = getattr(data, "results", None) or (
+            data.get("results", []) if isinstance(data, dict) else []
+        )
+        if not results:
+            return None
+        first = results[0]
+        return str(getattr(first, "id", first.get("id") if isinstance(first, dict) else None))
+
     def _fetch_deals(
         self,
         on_progress: Callable[[str, int], None] | None = None,
         company_map: dict[str, str] | None = None,
     ) -> list[Document]:
-        """Fetch all deals and return as Documents. Enrich with company name when company_map provided."""
+        """Fetch all deals and return as Documents. Enrich with company name and contact associations."""
         docs: list[Document] = []
         after: str | None = None
         company_map = company_map or {}
@@ -186,11 +203,10 @@ class HubSpotLoader:
                 kwargs: dict = {
                     "limit": _PAGE_LIMIT,
                     "properties": _DEAL_PROPS,
+                    "associations": ["companies", "contacts"],
                 }
                 if after:
                     kwargs["after"] = after
-                if company_map:
-                    kwargs["associations"] = ["companies"]
                 page = self.client.crm.deals.basic_api.get_page(**kwargs)
             except DealsApiException as exc:
                 raise RuntimeError(f"HubSpot Deals API error: {exc}") from exc
@@ -206,29 +222,27 @@ class HubSpotLoader:
                     f"Amount: {amount_str}",
                     f"Close Date: {props.get('closedate') or 'N/A'}",
                 ]
-                if company_map:
-                    company_name = "N/A"
-                    assoc = getattr(record, "associations", None)
-                    if assoc:
-                        companies_assoc = assoc.get("companies") if isinstance(assoc, dict) else getattr(assoc, "companies", None)
-                        if companies_assoc:
-                            results = getattr(companies_assoc, "results", None) or (companies_assoc.get("results", []) if isinstance(companies_assoc, dict) else [])
-                            if results:
-                                first = results[0]
-                                cid = getattr(first, "id", first.get("id") if isinstance(first, dict) else None)
-                                if cid:
-                                    company_name = company_map.get(str(cid), "N/A")
-                    lines.append(f"Company: {company_name}")
-                docs.append(
-                    Document(
-                        page_content="\n".join(lines),
-                        metadata={
-                            "source": "hubspot",
-                            "object_type": "deal",
-                            "hs_object_id": record.id,
-                        },
-                    )
-                )
+                assoc = getattr(record, "associations", None)
+                company_name = "N/A"
+                if company_map and assoc:
+                    cid = self._get_association_id(assoc, "companies")
+                    if cid:
+                        company_name = company_map.get(str(cid), "N/A")
+                lines.append(f"Company: {company_name}")
+
+                contact_id = None
+                if assoc:
+                    contact_id = self._get_association_id(assoc, "contacts")
+
+                meta: dict = {
+                    "source": "hubspot",
+                    "object_type": "deal",
+                    "hs_object_id": record.id,
+                }
+                if contact_id:
+                    meta["associated_contact_id"] = contact_id
+
+                docs.append(Document(page_content="\n".join(lines), metadata=meta))
 
             if on_progress:
                 on_progress("deals", len(docs))

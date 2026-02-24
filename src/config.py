@@ -32,3 +32,8 @@ ALLOWED_EXTENSIONS: set[str] = {".pdf", ".md", ".txt"}
 HUBSPOT_ACCESS_TOKEN: str = os.getenv("HUBSPOT_ACCESS_TOKEN", "")
 HUBSPOT_BASE_URL: str | None = os.getenv("HUBSPOT_BASE_URL") or None  # e.g. https://api-eu1.hubapi.com for EU
 HUBSPOT_OBJECTS: list[str] = ["contacts", "companies", "deals", "owners"]
+
+# Facebook Messenger
+FB_VERIFY_TOKEN: str = os.getenv("FB_VERIFY_TOKEN", "")
+FB_PAGE_ACCESS_TOKEN: str = os.getenv("FB_PAGE_ACCESS_TOKEN", "")
+FB_APP_SECRET: str = os.getenv("FB_APP_SECRET", "")

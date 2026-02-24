@@ -9,6 +9,36 @@ from langchain_core.vectorstores import VectorStoreRetriever
 from .config import LLM_MODEL, OPENAI_API_KEY, TOP_K
 
 
+def create_contact_scoped_retriever(vectorstore, contact_id: str, k: int | None = None) -> VectorStoreRetriever:
+    """
+    Create a retriever that only returns documents for a specific contact:
+    - The contact's own record (hs_object_id == contact_id)
+    - Deals associated with that contact (associated_contact_id == contact_id)
+    """
+    cid = str(contact_id)
+    return vectorstore.as_retriever(
+        search_kwargs={
+            "k": k or TOP_K,
+            "filter": {
+                "$or": [
+                    {"hs_object_id": cid},
+                    {"associated_contact_id": cid},
+                ]
+            },
+        }
+    )
+
+
+def answer_for_contact(vectorstore, contact_id: str, query: str) -> str:
+    """
+    Run contact-scoped RAG: answer the query using only that contact's data and their deals.
+    """
+    retriever = create_contact_scoped_retriever(vectorstore, contact_id)
+    rag_chain = create_rag_chain(retriever)
+    result = rag_chain.invoke({"input": query})
+    return (result.get("answer") or "").strip() or "I couldn't find relevant information for your account."
+
+
 def get_llm() -> ChatOpenAI:
     """Create ChatOpenAI instance."""
     if not OPENAI_API_KEY:
