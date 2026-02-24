@@ -32,6 +32,20 @@ ALLOWED_EXTENSIONS: set[str] = {".pdf", ".md", ".txt"}
 HUBSPOT_ACCESS_TOKEN: str = os.getenv("HUBSPOT_ACCESS_TOKEN", "")
 HUBSPOT_BASE_URL: str | None = os.getenv("HUBSPOT_BASE_URL") or None  # e.g. https://api-eu1.hubapi.com for EU
 HUBSPOT_OBJECTS: list[str] = ["contacts", "companies", "deals", "owners"]
+HUBSPOT_CACHE_PATH: Path = Path(
+    os.getenv("HUBSPOT_CACHE_PATH", "./data/hubspot_cache.db")
+).resolve()
+def _parse_ttl_hours() -> float | None:
+    val = os.getenv("HUBSPOT_CACHE_TTL_HOURS")
+    if not val or not val.strip():
+        return None
+    try:
+        return float(val)
+    except ValueError:
+        return None
+
+
+HUBSPOT_CACHE_TTL_HOURS: float | None = _parse_ttl_hours()
 
 # Facebook Messenger
 FB_VERIFY_TOKEN: str = os.getenv("FB_VERIFY_TOKEN", "")

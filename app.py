@@ -7,6 +7,7 @@ import streamlit as st
 
 from src.config import ALLOWED_EXTENSIONS, HUBSPOT_ACCESS_TOKEN, OPENAI_API_KEY
 from src.db import get_all_linked, get_unlinked_psids, init_db, link_psid_to_contact
+from src.hubspot_cache import get_cache_counts, get_cache_timestamp, load_hubspot_docs
 from src.hubspot_loader import HubSpotLoader
 from src.ingestion import index_documents, ingest_documents, load_vectorstore
 from src.retrieval import correct_query, create_rag_chain, get_retriever
@@ -102,19 +103,32 @@ def main():
                         progress_placeholder = st.empty()
                         progress_placeholder.markdown("_Waiting for first page…_")
                         st.write("Fetching contacts...")
-                        contacts = loader.load_contacts(on_progress=on_progress)
+                        contacts = loader.load_contacts(
+                            on_progress=on_progress,
+                            force_refresh=True,
+                        )
                         st.write(f"✓ Fetched {len(contacts):,} contacts")
 
                         st.write("Fetching companies...")
-                        companies = loader.load_companies(on_progress=on_progress)
+                        companies = loader.load_companies(
+                            on_progress=on_progress,
+                            force_refresh=True,
+                        )
                         st.write(f"✓ Fetched {len(companies):,} companies")
 
                         st.write("Fetching deals...")
-                        deals = loader.load_deals(on_progress=on_progress, companies=companies)
+                        deals = loader.load_deals(
+                            on_progress=on_progress,
+                            companies=companies,
+                            force_refresh=True,
+                        )
                         st.write(f"✓ Fetched {len(deals):,} deals")
 
                         st.write("Fetching owners...")
-                        owners = loader.load_owners(on_progress=on_progress)
+                        owners = loader.load_owners(
+                            on_progress=on_progress,
+                            force_refresh=True,
+                        )
                         st.write(f"✓ Fetched {len(owners):,} owners")
 
                         docs = contacts + companies + deals + owners
@@ -150,6 +164,52 @@ def main():
                             st.warning("No CRM records found in HubSpot.")
                 except Exception as e:
                     st.error(f"HubSpot sync failed: {e}")
+
+        # Cached data summary + index-from-DB button
+        st.subheader("Cached data")
+        counts = get_cache_counts()
+        if counts:
+            ts = get_cache_timestamp()
+            if ts:
+                st.caption(f"Last synced: {ts.strftime('%Y-%m-%d %H:%M')} UTC")
+            _LABELS = {
+                "contact": "Contacts",
+                "company": "Companies",
+                "deal": "Deals",
+                "owner": "Owners",
+            }
+            cols = st.columns(2)
+            for i, key in enumerate(["contact", "company", "deal", "owner"]):
+                cols[i % 2].metric(_LABELS[key], f"{counts.get(key, 0):,}")
+            if st.button("Index from database", type="primary"):
+                try:
+                    with st.status("Indexing cached data...", expanded=True) as status:
+                        docs = load_hubspot_docs()
+                        if not docs:
+                            status.update(label="Cache is empty", state="error")
+                            st.warning("No records in cache. Run **Sync from HubSpot** first.")
+                        else:
+                            st.write(f"Loading {len(docs):,} records from database...")
+                            vectorstore = ingest_documents(docs)
+                            retriever = get_retriever(vectorstore)
+                            st.session_state.rag_chain = create_rag_chain(retriever)
+                            st.write("✓ Embedded and indexed")
+                            status.update(
+                                label=f"Indexed {len(docs):,} records",
+                                state="complete",
+                                expanded=False,
+                            )
+                            st.success(
+                                "Ready to chat using cached CRM data. "
+                                + ", ".join(
+                                    f"{_LABELS.get(k, k)}={v:,}"
+                                    for k, v in sorted(counts.items())
+                                )
+                            )
+                except Exception as e:
+                    st.error(f"Indexing failed: {e}")
+        else:
+            st.caption("No data cached yet. Run **Sync from HubSpot** first.")
 
         st.divider()
         if st.session_state.rag_chain:
@@ -212,25 +272,47 @@ def _render_facebook_tab():
     if not HUBSPOT_ACCESS_TOKEN:
         st.warning("Set `HUBSPOT_ACCESS_TOKEN` in your `.env` file to load contacts for linking.")
     else:
-        if st.button("Load contacts from HubSpot", key="fb_load_contacts"):
-            with st.spinner("Loading contacts..."):
-                try:
-                    loader = HubSpotLoader()
-                    docs = loader.load_contacts()
-                    st.session_state.fb_contacts = [
-                        {
-                            "id": str(d.metadata.get("hs_object_id", "")),
-                            "name": d.page_content.split("\n")[0].replace("Contact: ", "").strip() or "Unknown",
-                            "email": next(
-                                (line.replace("Email: ", "").strip() for line in d.page_content.split("\n") if line.startswith("Email: ")),
-                                "N/A",
-                            ),
-                        }
-                        for d in docs
-                    ]
-                    st.success(f"Loaded {len(st.session_state.fb_contacts)} contacts.")
-                except Exception as e:
-                    st.error(f"Failed to load contacts: {e}")
+        col_load, col_refresh = st.columns(2)
+        with col_load:
+            if st.button("Load contacts from HubSpot", key="fb_load_contacts"):
+                with st.spinner("Loading contacts (from cache if available)..."):
+                    try:
+                        loader = HubSpotLoader()
+                        docs = loader.load_contacts(use_cache=True)
+                        st.session_state.fb_contacts = [
+                            {
+                                "id": str(d.metadata.get("hs_object_id", "")),
+                                "name": d.page_content.split("\n")[0].replace("Contact: ", "").strip() or "Unknown",
+                                "email": next(
+                                    (line.replace("Email: ", "").strip() for line in d.page_content.split("\n") if line.startswith("Email: ")),
+                                    "N/A",
+                                ),
+                            }
+                            for d in docs
+                        ]
+                        st.success(f"Loaded {len(st.session_state.fb_contacts)} contacts.")
+                    except Exception as e:
+                        st.error(f"Failed to load contacts: {e}")
+        with col_refresh:
+            if st.button("Refresh from API", key="fb_refresh_contacts"):
+                with st.spinner("Refreshing contacts from HubSpot API..."):
+                    try:
+                        loader = HubSpotLoader()
+                        docs = loader.load_contacts(use_cache=True, force_refresh=True)
+                        st.session_state.fb_contacts = [
+                            {
+                                "id": str(d.metadata.get("hs_object_id", "")),
+                                "name": d.page_content.split("\n")[0].replace("Contact: ", "").strip() or "Unknown",
+                                "email": next(
+                                    (line.replace("Email: ", "").strip() for line in d.page_content.split("\n") if line.startswith("Email: ")),
+                                    "N/A",
+                                ),
+                            }
+                            for d in docs
+                        ]
+                        st.success(f"Refreshed {len(st.session_state.fb_contacts)} contacts.")
+                    except Exception as e:
+                        st.error(f"Failed to refresh contacts: {e}")
 
     st.divider()
 

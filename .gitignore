@@ -1,6 +1,8 @@
 .env
 chroma_db/
 fb_messenger.db
+data/
+hubspot_cache.db
 __pycache__/
 *.pyc
 .venv/

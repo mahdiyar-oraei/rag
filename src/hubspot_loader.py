@@ -13,6 +13,11 @@ from hubspot.crm.owners import ApiException as OwnersApiException
 from langchain_core.documents import Document
 
 from .config import HUBSPOT_ACCESS_TOKEN, HUBSPOT_BASE_URL
+from .hubspot_cache import (
+    is_cache_stale,
+    load_hubspot_docs,
+    save_hubspot_docs,
+)
 
 _CONTACT_PROPS = ["firstname", "lastname", "email", "phone", "company", "jobtitle"]
 _COMPANY_PROPS = ["name", "domain", "industry", "city", "state", "country", "phone"]
@@ -108,11 +113,20 @@ class HubSpotLoader:
     def load_contacts(
         self,
         on_progress: Callable[[str, int], None] | None = None,
+        use_cache: bool = True,
+        force_refresh: bool = False,
     ) -> list[Document]:
-        """Fetch all contacts (with timeout when on_progress is not used)."""
+        """Fetch all contacts from cache or API (with timeout when on_progress is not used)."""
+        if use_cache and not force_refresh and not is_cache_stale():
+            cached = load_hubspot_docs(object_types=["contact"])
+            if cached:
+                return cached
         if on_progress is not None:
-            return self._fetch_contacts(on_progress=on_progress)
-        return self._run_with_timeout(self._fetch_contacts)
+            docs = self._fetch_contacts(on_progress=on_progress)
+        else:
+            docs = self._run_with_timeout(self._fetch_contacts)
+        save_hubspot_docs(docs)
+        return docs
 
     def _fetch_companies(
         self,
@@ -165,11 +179,20 @@ class HubSpotLoader:
     def load_companies(
         self,
         on_progress: Callable[[str, int], None] | None = None,
+        use_cache: bool = True,
+        force_refresh: bool = False,
     ) -> list[Document]:
-        """Fetch all companies (with timeout when on_progress is not used)."""
+        """Fetch all companies from cache or API (with timeout when on_progress is not used)."""
+        if use_cache and not force_refresh and not is_cache_stale():
+            cached = load_hubspot_docs(object_types=["company"])
+            if cached:
+                return cached
         if on_progress is not None:
-            return self._fetch_companies(on_progress=on_progress)
-        return self._run_with_timeout(self._fetch_companies)
+            docs = self._fetch_companies(on_progress=on_progress)
+        else:
+            docs = self._run_with_timeout(self._fetch_companies)
+        save_hubspot_docs(docs)
+        return docs
 
     def _get_association_id(
         self, assoc: object, key: str
@@ -258,8 +281,14 @@ class HubSpotLoader:
         self,
         on_progress: Callable[[str, int], None] | None = None,
         companies: list[Document] | None = None,
+        use_cache: bool = True,
+        force_refresh: bool = False,
     ) -> list[Document]:
-        """Fetch all deals (with timeout when on_progress is not used). Enrich with company names when companies provided."""
+        """Fetch all deals from cache or API. Enrich with company names when companies provided (API only)."""
+        if use_cache and not force_refresh and not is_cache_stale():
+            cached = load_hubspot_docs(object_types=["deal"])
+            if cached:
+                return cached
         company_map: dict[str, str] = {}
         if companies:
             for doc in companies:
@@ -269,10 +298,13 @@ class HubSpotLoader:
                     name = first_line.replace("Company: ", "").strip() or "Unknown"
                     company_map[str(cid)] = name
         if on_progress is not None:
-            return self._fetch_deals(on_progress=on_progress, company_map=company_map or None)
-        return self._run_with_timeout(
-            lambda: self._fetch_deals(company_map=company_map or None)
-        )
+            docs = self._fetch_deals(on_progress=on_progress, company_map=company_map or None)
+        else:
+            docs = self._run_with_timeout(
+                lambda: self._fetch_deals(company_map=company_map or None)
+            )
+        save_hubspot_docs(docs)
+        return docs
 
     def _fetch_owners(
         self,
@@ -321,11 +353,20 @@ class HubSpotLoader:
     def load_owners(
         self,
         on_progress: Callable[[str, int], None] | None = None,
+        use_cache: bool = True,
+        force_refresh: bool = False,
     ) -> list[Document]:
-        """Fetch all owners (with timeout when on_progress is not used)."""
+        """Fetch all owners from cache or API (with timeout when on_progress is not used)."""
+        if use_cache and not force_refresh and not is_cache_stale():
+            cached = load_hubspot_docs(object_types=["owner"])
+            if cached:
+                return cached
         if on_progress is not None:
-            return self._fetch_owners(on_progress=on_progress)
-        return self._run_with_timeout(self._fetch_owners)
+            docs = self._fetch_owners(on_progress=on_progress)
+        else:
+            docs = self._run_with_timeout(self._fetch_owners)
+        save_hubspot_docs(docs)
+        return docs
 
     # ------------------------------------------------------------------
     # Aggregate loader
@@ -334,10 +375,12 @@ class HubSpotLoader:
     def load_all(
         self,
         on_progress: Callable[[str, int], None] | None = None,
+        use_cache: bool = True,
+        force_refresh: bool = False,
     ) -> tuple[list[Document], dict[str, int]]:
         """
-        Fetch all CRM objects and return combined Documents with a count summary.
-        Deals are enriched with company names when available.
+        Fetch all CRM objects from cache or API and return combined Documents with a count summary.
+        Deals are enriched with company names when available (API only).
 
         Returns:
             Tuple of (all_documents, counts_per_object_type).
@@ -345,19 +388,36 @@ class HubSpotLoader:
         all_docs: list[Document] = []
         counts: dict[str, int] = {}
 
-        contacts = self.load_contacts(on_progress=on_progress)
+        contacts = self.load_contacts(
+            on_progress=on_progress,
+            use_cache=use_cache,
+            force_refresh=force_refresh,
+        )
         counts["contacts"] = len(contacts)
         all_docs.extend(contacts)
 
-        companies = self.load_companies(on_progress=on_progress)
+        companies = self.load_companies(
+            on_progress=on_progress,
+            use_cache=use_cache,
+            force_refresh=force_refresh,
+        )
         counts["companies"] = len(companies)
         all_docs.extend(companies)
 
-        deals = self.load_deals(on_progress=on_progress, companies=companies)
+        deals = self.load_deals(
+            on_progress=on_progress,
+            companies=companies,
+            use_cache=use_cache,
+            force_refresh=force_refresh,
+        )
         counts["deals"] = len(deals)
         all_docs.extend(deals)
 
-        owners = self.load_owners(on_progress=on_progress)
+        owners = self.load_owners(
+            on_progress=on_progress,
+            use_cache=use_cache,
+            force_refresh=force_refresh,
+        )
         counts["owners"] = len(owners)
         all_docs.extend(owners)
 
