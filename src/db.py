@@ -18,6 +18,7 @@ def _get_conn() -> sqlite3.Connection:
 
 def init_db() -> None:
     """Create tables if they do not exist."""
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _get_conn() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS fb_contact_mapping (
